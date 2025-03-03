@@ -1,12 +1,11 @@
 package com.freshworks.FreshService.connector.util;
 
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.freshworks.FreshService.common.util.CommonUtil;
 import com.freshworks.FreshService.common.util.JsonUtil;
-import com.freshworks.FreshService.connector.dtos.ConnectorData;
-import com.freshworks.FreshService.connector.dtos.FSConnectionDetails;
-import com.freshworks.FreshService.connector.dtos.FreshserviceTicket;
+import com.freshworks.FreshService.connector.dtos.*;
 import com.freshworks.FreshService.connector.request.TicketConnectorRequest;
 import lombok.extern.slf4j.Slf4j;
 
@@ -127,10 +126,14 @@ public class TicketConnectorUtil {
         String uriString = UriComponentsBuilder.fromUriString(createTicketUrl)
                 .buildAndExpand(fsConnectionDetails.getAccountDomain())
                 .toUriString();
-        FreshserviceTicket freshserviceTicket = createFSTicketModel(ticketNode, inputFromOtherConnector);
+
+        String auth = getAuth(fsConnectionDetails.getPassword(), fsConnectionDetails.getUser());
+        List<FSDepartment> departments = fetchFSDepartmentList(fsConnectionDetails);
+        List<FSGroup> fsGroups = fetchFSGroupList((fsConnectionDetails));
+        FreshserviceTicket freshserviceTicket = createFSTicketModel(ticketNode, inputFromOtherConnector, departments, fsGroups);
 
         RestClient restClient = RestClient.create();
-        String auth = getAuth(fsConnectionDetails.getPassword(), fsConnectionDetails.getUser());
+
 
         ResponseEntity<String> response = restClient.post()
                 .uri(uriString)
@@ -152,11 +155,76 @@ public class TicketConnectorUtil {
 //        return statusCode.is2xxSuccessful() ? "Ticket Created Successfully" : "Failed to create ticket";
     }
 
-    private static FreshserviceTicket createFSTicketModel(JsonNode ticketNode, Map<String, Object> inputFromOtherConnector) throws IOException {
+    private static List<FSDepartment> fetchFSDepartmentList(FSConnectionDetails fsConnectionDetails) throws IOException {
+
+        String createTicketUrl = "https://{domain}.freshservice.com/api/v2/departments";
+        String uriString = UriComponentsBuilder.fromUriString(createTicketUrl)
+                .buildAndExpand(fsConnectionDetails.getAccountDomain())
+                .toUriString();
+        String auth = getAuth(fsConnectionDetails.getPassword(), fsConnectionDetails.getUser());
+
+        RestClient restClient = RestClient.create();
+
+        ResponseEntity<String> entity = restClient.get()
+                .uri(uriString)
+                .header(HttpHeaders.AUTHORIZATION, "Basic " + auth)
+                .header(HttpHeaders.CONTENT_TYPE, "application/json")
+                .header(HttpHeaders.ACCEPT, "application/json")
+                .retrieve()
+                .toEntity(String.class);
+
+        String body = entity.getBody();
+        JsonNode jsonNode = JsonUtil.parseAsJsonNode(body);
+        JsonNode departmentNode = jsonNode.get("departments");
+        List<FSDepartment> departments = new ArrayList<>();
+//        if(departmentNode.isArray()){
+            for(JsonNode node : departmentNode){
+                FSDepartment fsDepartment = JsonUtil.parseAsObject(node, FSDepartment.class);
+                departments.add(fsDepartment);
+            }
+//        }
+        return departments;
+    }
+
+    private static List<FSGroup> fetchFSGroupList(FSConnectionDetails fsConnectionDetails) throws IOException {
+
+        String createTicketUrl = "https://{domain}.freshservice.com/api/v2/groups";
+        String uriString = UriComponentsBuilder.fromUriString(createTicketUrl)
+                .buildAndExpand(fsConnectionDetails.getAccountDomain())
+                .toUriString();
+        String auth = getAuth(fsConnectionDetails.getPassword(), fsConnectionDetails.getUser());
+
+        RestClient restClient = RestClient.create();
+
+        ResponseEntity<String> entity = restClient.get()
+                .uri(uriString)
+                .header(HttpHeaders.AUTHORIZATION, "Basic " + auth)
+                .header(HttpHeaders.CONTENT_TYPE, "application/json")
+                .header(HttpHeaders.ACCEPT, "application/json")
+                .retrieve()
+                .toEntity(String.class);
+
+        String body = entity.getBody();
+        JsonNode jsonNode = JsonUtil.parseAsJsonNode(body);
+        JsonNode groupNode = jsonNode.get("groups");
+        List<FSGroup> groups = new ArrayList<>();
+//        if(departmentNode.isArray()){
+        for(JsonNode node : groupNode){
+            FSGroup fsGroup = JsonUtil.parseAsObject(node, FSGroup.class);
+            groups.add(fsGroup);
+        }
+//        }
+        return groups;
+    }
+
+
+    private static FreshserviceTicket createFSTicketModel(JsonNode ticketNode, Map<String, Object> inputFromOtherConnector,
+                                                          List<FSDepartment> departments,
+                                                          List<FSGroup> groups) throws IOException {
 
         FreshserviceTicket freshserviceTicket = JsonUtil.parseAsObject(ticketNode, FreshserviceTicket.class);
-        Long groupId = getGroupId(ticketNode);
-        Long departmentId = departmentId(ticketNode);
+        Long groupId = getGroupId(ticketNode, groups);
+        Long departmentId = departmentId(ticketNode, departments);
         freshserviceTicket.setDepartmentId(departmentId);
         freshserviceTicket.setGroupId(groupId);
 
@@ -180,23 +248,24 @@ public class TicketConnectorUtil {
         return Base64.getEncoder().encodeToString(auth.getBytes());
     }
 
-    private static Long getGroupId(JsonNode ticketNode) {
+    private static Long getGroupId(JsonNode ticketNode, List<FSGroup> groups) {
         String type = ticketNode.get("type").asText();
         if(type.equals("laptop"))
-            return 29000592980L;
-        else if(type.equals("CustomerId"))
-            return 29000592986L;
+             return groups.stream().filter(d -> "Hardware Team".equalsIgnoreCase(d.getName())).findFirst().get().getId();;
+         if(type.equals("CustomerId"))
+            return groups.stream().filter(d -> "Helpdesk Monitoring Team".equalsIgnoreCase(d.getName())).findFirst().get().getId();;
 
         return 29000592980L;
     }
 
 
-    private static Long departmentId(JsonNode ticketNode) {
+    private static Long departmentId(JsonNode ticketNode, List<FSDepartment> departments) {
         String type = ticketNode.get("type").asText();
+
         if(type.equals("laptop"))
-            return 29000324531L;
+            return departments.stream().filter(d -> "IT".equalsIgnoreCase(d.getName())).findFirst().get().getId();
         else if(type.equals("CustomerId"))
-            return 29000324530L;
+            return departments.stream().filter(d -> "Operations".equalsIgnoreCase(d.getName())).findFirst().get().getId();
 
         return 29000592980L;
     }
